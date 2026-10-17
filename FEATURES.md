@@ -1,4 +1,4 @@
-# 🎯 AI-Powered ATS - Feature Overview
+# 🎯 HireIQ - Feature Overview
 
 ## 🌟 Quick Feature Guide
 

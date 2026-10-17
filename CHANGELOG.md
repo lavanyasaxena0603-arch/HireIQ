@@ -1,4 +1,4 @@
-# 📝 Changelog - AI-Powered ATS
+# 📝 Changelog - HireIQ
 
 All notable changes and features of this project are documented here.
 
@@ -6,7 +6,7 @@ All notable changes and features of this project are documented here.
 
 ## [1.0.0] - 2025-12-26
 
-### 🎉 Initial Release - Complete AI-Powered ATS
+### 🎉 Initial Release - HireIQ
 
 #### ✨ Features Added
 

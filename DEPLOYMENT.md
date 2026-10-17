@@ -1,4 +1,4 @@
-# 🚀 Deployment Guide - AI-Powered ATS
+# 🚀 Deployment Guide - HireIQ
 
 ## Quick Deployment Options
 
@@ -24,7 +24,7 @@ Before deploying, ensure you have:
 ```bash
 git init
 git add .
-git commit -m "Initial commit - AI-Powered ATS"
+git commit -m "Initial commit - HireIQ"
 git branch -M main
 git remote add origin https://github.com/yourusername/ai-ats.git
 git push -u origin main
@@ -514,7 +514,7 @@ firebase deploy
 
 ## ✅ Success!
 
-Once deployed, your AI-Powered ATS will be live and accessible worldwide!
+Once deployed, your HireIQ platform will be live and accessible worldwide!
 
 **Share your live URL:**
 ```

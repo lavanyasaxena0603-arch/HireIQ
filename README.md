@@ -1,6 +1,6 @@
-# AI Recruiter 🤖
+# HireIQ 🤖
 
-AI Recruiter is a futuristic, intelligent Applicant Tracking System (ATS) and Candidate Portal powered by modern web technologies and Artificial Intelligence. It provides seamless authentication, beautiful UI/UX, and an advanced AI-powered resume analyzer to help candidates improve their ATS scores and align with target job descriptions.
+**HireIQ** is a futuristic, intelligent hiring platform and Candidate Portal powered by modern web technologies and Artificial Intelligence. It provides seamless authentication, beautiful UI/UX, and an advanced AI-powered resume analyzer to help candidates improve their scores and align with target job descriptions.
 
 ## ✨ Features
 

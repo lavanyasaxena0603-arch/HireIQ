@@ -1,4 +1,4 @@
-# 📑 File Index - AI-Powered ATS
+# 📑 File Index - HireIQ
 
 ## 📂 Complete Project Structure
 

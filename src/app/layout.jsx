@@ -5,11 +5,11 @@ import Script from 'next/script';
 import { ToastProvider } from '@/components/ui/Toast';
 
 export const metadata = {
-  title: 'HireIQ — AI-Powered Applicant Tracking System',
-  description: 'Professional ATS platform with AI resume analysis, NLP extraction, skill gap analysis, and intelligent candidate matching.',
-  keywords: 'ATS, applicant tracking system, AI resume analysis, NLP, hiring, recruitment, resume parser',
+  title: 'HireIQ — AI-Powered Hiring Platform',
+  description: 'HireIQ: Smart hiring platform with AI resume analysis, NLP extraction, skill gap analysis, and intelligent candidate matching.',
+  keywords: 'HireIQ, applicant tracking system, AI resume analysis, NLP, hiring, recruitment, resume parser',
   openGraph: {
-    title: 'HireIQ — AI-Powered ATS',
+    title: 'HireIQ — AI-Powered Hiring Platform',
     description: 'Smart hiring platform with Gemini AI resume intelligence',
     type: 'website',
   },

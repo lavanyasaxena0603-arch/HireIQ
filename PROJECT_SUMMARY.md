@@ -1,4 +1,4 @@
-# 📋 AI-Powered ATS - Project Summary
+# 📋 HireIQ - Project Summary
 
 ## 🎯 Project Overview
 

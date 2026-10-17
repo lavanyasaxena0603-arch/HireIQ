@@ -1,4 +1,4 @@
-# 🚀 Quick Start Guide - AI-Powered ATS
+# 🚀 Quick Start Guide - HireIQ
 
 ## ⚡ Get Started in 3 Steps
 
