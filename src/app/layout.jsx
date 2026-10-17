@@ -1,34 +1,46 @@
 import './globals.css';
 import Navbar from '@/components/Navbar';
 import Footer from '@/components/Footer';
+import Script from 'next/script';
+import { ToastProvider } from '@/components/ui/Toast';
 
 export const metadata = {
-  title: 'AI Recruiter - Virtual Applicant Tracking System',
-  description: 'AI-powered intelligent screening system',
+  title: 'HireIQ — AI-Powered Applicant Tracking System',
+  description: 'Professional ATS platform with AI resume analysis, NLP extraction, skill gap analysis, and intelligent candidate matching.',
+  keywords: 'ATS, applicant tracking system, AI resume analysis, NLP, hiring, recruitment, resume parser',
+  openGraph: {
+    title: 'HireIQ — AI-Powered ATS',
+    description: 'Smart hiring platform with Gemini AI resume intelligence',
+    type: 'website',
+  },
 };
 
 export default function RootLayout({ children }) {
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
+        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
         <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
-        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
-        <script dangerouslySetInnerHTML={{
-          __html: `
+        <Script id="theme-script" strategy="beforeInteractive">
+          {`
             try {
               if (localStorage.theme === 'light') {
                 document.documentElement.setAttribute('data-theme', 'light')
               }
             } catch (_) {}
-          `,
-        }} />
+          `}
+        </Script>
       </head>
       <body>
-        <Navbar />
-        <main>
-          {children}
-        </main>
-        <Footer />
+        <ToastProvider>
+          <Navbar />
+          <main>
+            {children}
+          </main>
+          <Footer />
+        </ToastProvider>
       </body>
     </html>
   );

@@ -1,23 +1,26 @@
 "use client";
 import Link from 'next/link';
 import { useState, useEffect } from 'react';
-import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
-import { createClient } from '@supabase/supabase-js';
-
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-const supabase = supabaseUrl && supabaseKey ? createClient(supabaseUrl, supabaseKey) : null;
-
-pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
+import { supabase } from '@/lib/supabase';
+import UploadZone from '@/components/ui/UploadZone';
+import ScoreCircle from '@/components/ui/ScoreCircle';
+import ResumeHeatmap from '@/components/ui/ResumeHeatmap';
+import ExperienceTimeline from '@/components/ui/ExperienceTimeline';
+import SkillGapAnalyzer from '@/components/ui/SkillGapAnalyzer';
+import JobRadar from '@/components/ui/JobRadar';
 
 export default function ResumeAnalyzer() {
   const [file, setFile] = useState(null);
   const [resumeText, setResumeText] = useState('');
   const [mode, setMode] = useState('general');
   const [jobDescription, setJobDescription] = useState('');
+  const [isExtracting, setIsExtracting] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [result, setResult] = useState(null);
   const [user, setUser] = useState(null);
+  const [saveStatus, setSaveStatus] = useState(null);
+  const [activeTab, setActiveTab] = useState('scores');
+  const [extractError, setExtractError] = useState(null);
 
   useEffect(() => {
     if (supabase) {
@@ -27,60 +30,67 @@ export default function ResumeAnalyzer() {
     }
   }, []);
 
-  const handleFileUpload = async (e) => {
-    const uploadedFile = e.target.files[0];
-    if (!uploadedFile) return;
-    setFile(uploadedFile);
-    
-    if (uploadedFile.type === 'application/pdf') {
-      try {
-        const fileUrl = URL.createObjectURL(uploadedFile);
-        const pdf = await pdfjsLib.getDocument({ url: fileUrl }).promise;
-        let text = '';
-        for (let i = 1; i <= pdf.numPages; i++) {
-          const page = await pdf.getPage(i);
-          const content = await page.getTextContent();
-          text += content.items.map(item => item.str).join(' ') + '\\n';
-        }
-        setResumeText(text);
-        URL.revokeObjectURL(fileUrl);
-      } catch (err) {
-        console.error("PDF Parsing error:", err);
-        alert("Failed to parse PDF. Please paste the text manually.");
+  const handleFileSelect = async (selectedFile) => {
+    setFile(selectedFile);
+    setResumeText('');
+    setExtractError(null);
+
+    if (!selectedFile) return;
+
+    setIsExtracting(true);
+    try {
+      const { extractResumeText, validateResumeFile } = await import('@/lib/resumeParser');
+      const validation = validateResumeFile(selectedFile);
+      if (!validation.valid) {
+        setExtractError(validation.error);
+        setIsExtracting(false);
+        return;
       }
-    } else {
-      alert("Only PDF extraction is fully supported right now. For DOCX, please paste the text below temporarily.");
+      const text = await extractResumeText(selectedFile);
+      setResumeText(text);
+    } catch (err) {
+      console.error('Text extraction error:', err);
+      setExtractError(`Could not extract text: ${err.message}. You can paste your resume text below.`);
+    } finally {
+      setIsExtracting(false);
     }
   };
 
   const handleAnalyze = async () => {
-    if (!resumeText) return alert('Please upload a resume or paste your resume text');
+    if (!resumeText || resumeText.trim().length < 50) {
+      alert('Please upload a resume or paste your resume text (minimum 50 characters).');
+      return;
+    }
     setIsAnalyzing(true);
-    
+    setSaveStatus(null);
+    setResult(null);
+
     try {
       const res = await fetch('/api/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ resumeText, jobDescription, mode })
+        body: JSON.stringify({ resumeText, jobDescription, mode }),
       });
-      const data = await res.json();
-      if (data.error) throw new Error(data.error);
-      
+      const json = await res.json();
+      if (json.error) throw new Error(json.error);
+
+      const data = json.data;
       setResult(data);
+      setActiveTab('scores');
 
       if (user && supabase) {
-        // Save to history
-        await supabase.from('resume_analyses').insert({
-          user_id: user.id,
-          resume_name: file ? file.name : 'Pasted Resume',
-          resume_text: resumeText,
-          analysis_mode: mode,
-          job_description: jobDescription,
-          overall_score: data.overall_score,
-          ats_score: data.ats_score,
-          jd_match_score: data.jd_match_score || null,
-          analysis_json: data
-        });
+        setSaveStatus('saving');
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session) {
+          const { saveResumeAnalysis } = await import('@/actions/candidate');
+          const saveRes = await saveResumeAnalysis(
+            resumeText,
+            data,
+            session.access_token,
+            file?.name || null
+          );
+          setSaveStatus(saveRes.success ? 'saved' : 'error');
+        }
       }
     } catch (err) {
       alert('Analysis failed: ' + err.message);
@@ -89,158 +99,357 @@ export default function ResumeAnalyzer() {
     }
   };
 
+  const handleExportJSON = () => {
+    if (!result) return;
+    const json = JSON.stringify(result, null, 2);
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `resume-analysis-${Date.now()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const analysis = result?.analysis || {};
+
+  const TABS = [
+    { id: 'scores', label: '📊 Scores' },
+    { id: 'profile', label: '👤 Profile' },
+    { id: 'experience', label: '💼 Experience' },
+    { id: 'skills', label: '⚡ Skills & Gaps' },
+    { id: 'heatmap', label: '🔥 Heatmap' },
+    { id: 'radar', label: '📡 Job Match' },
+    { id: 'insights', label: '💡 Insights' },
+  ];
+
   return (
-    <section className="section active">
-      <div className="form-container" style={{ maxWidth: '900px', margin: '0 auto' }}>
-        <div className="form-header">
-          <h2><i className="fas fa-magic"></i> AI Resume Analyzer</h2>
-          <p>Get instant feedback on your resume</p>
+    <section className="section active" style={{ padding: '40px 20px' }}>
+      <div style={{ maxWidth: '1000px', margin: '0 auto' }}>
+        
+        {/* Header */}
+        <div style={{ marginBottom: '40px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '16px' }}>
+          <div>
+            <h2 style={{ fontSize: '36px', fontWeight: 900, marginBottom: '8px', letterSpacing: '-0.02em' }}>
+              ✨ AI Resume Analyzer
+            </h2>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '16px' }}>
+              Full NLP analysis · Heatmap · Job matching · Skill gaps · Career timeline
+            </p>
+          </div>
+          {result && (
+            <div style={{ display: 'flex', gap: '12px' }}>
+              <button onClick={() => { setResult(null); setFile(null); setResumeText(''); setSaveStatus(null); }} className="btn">
+                ↩ Analyze Another
+              </button>
+              <button onClick={handleExportJSON} className="btn btn-secondary">
+                ⬇ Export JSON
+              </button>
+            </div>
+          )}
+
+          {saveStatus && (
+            <div style={{
+              width: '100%', marginTop: '8px', padding: '12px 16px', borderRadius: 'var(--radius-md)', fontSize: '14px',
+              display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600,
+              background: saveStatus === 'saved' ? '#ecfdf5' : saveStatus === 'saving' ? 'var(--bg-primary)' : '#fef2f2',
+              color: saveStatus === 'saved' ? 'var(--success)' : saveStatus === 'saving' ? 'var(--primary)' : 'var(--danger)',
+              border: `1px solid ${saveStatus === 'saved' ? '#a7f3d0' : saveStatus === 'saving' ? 'var(--border)' : '#fecaca'}`,
+            }}>
+              {saveStatus === 'saving' && <span className="animate-spin">⌛</span>}
+              {saveStatus === 'saved' && '✓'}
+              {saveStatus === 'error' && '⚠️'}
+              {saveStatus === 'saving' ? 'Saving to your account...' : saveStatus === 'saved' ? 'Saved to your Resume Center' : 'Could not save — check your connection'}
+            </div>
+          )}
         </div>
 
+        {/* Upload Form */}
         {!result && (
-          <div className="application-form" style={{ display: 'block' }}>
-            <div className="form-group full-width" style={{ marginBottom: '2rem' }}>
-              <label>Analysis Mode</label>
-              <div style={{ display: 'flex', gap: '1rem' }}>
-                <button 
-                  className={`btn ${mode === 'general' ? 'btn-primary' : 'btn-secondary'}`}
-                  onClick={() => setMode('general')}
-                  style={{ flex: 1 }}
-                >
-                  <i className="fas fa-file-alt"></i> General Evaluation
-                </button>
-                <button 
-                  className={`btn ${mode === 'tailored' ? 'btn-primary' : 'btn-secondary'}`}
-                  onClick={() => setMode('tailored')}
-                  style={{ flex: 1 }}
-                >
-                  <i className="fas fa-bullseye"></i> Job Tailored
-                </button>
+          <div className="card" style={{ padding: '40px' }}>
+            
+            <div style={{ marginBottom: '32px' }}>
+              <label style={{ fontSize: '13px', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: '12px' }}>
+                Analysis Mode
+              </label>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '12px' }}>
+                {[
+                  { id: 'general', label: '📄 General Evaluation', desc: 'Overall quality + ATS score' },
+                  { id: 'tailored', label: '🎯 Job Tailored', desc: 'Match against a job description' },
+                ].map(m => (
+                  <button
+                    key={m.id}
+                    onClick={() => setMode(m.id)}
+                    style={{
+                      padding: '16px', borderRadius: 'var(--radius-md)', textAlign: 'left',
+                      border: `2px solid ${mode === m.id ? 'var(--primary)' : 'var(--border)'}`,
+                      background: mode === m.id ? 'rgba(37, 99, 235, 0.04)' : 'transparent',
+                      cursor: 'pointer', transition: 'all 0.2s',
+                    }}
+                  >
+                    <div style={{ fontWeight: 800, color: mode === m.id ? 'var(--primary)' : 'var(--text-primary)', marginBottom: '4px' }}>{m.label}</div>
+                    <div style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>{m.desc}</div>
+                  </button>
+                ))}
               </div>
             </div>
 
-            <div className="form-group full-width">
-              <label><i className="fas fa-file-upload"></i> Upload Resume (PDF)</label>
-              <div className="file-upload-area" onClick={() => document.getElementById('resumeUpload').click()}>
-                <input type="file" id="resumeUpload" accept=".pdf" hidden onChange={handleFileUpload} />
-                <i className="fas fa-cloud-upload-alt"></i>
-                <p>{file ? file.name : "Drag and drop your resume here or click to browse"}</p>
-                <span className="file-info">Supported: PDF</span>
-              </div>
+            <div style={{ marginBottom: '24px' }}>
+              <label style={{ fontSize: '13px', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: '12px' }}>
+                Upload Resume
+              </label>
+              <UploadZone onFileSelect={handleFileSelect} isLoading={isExtracting || isAnalyzing} />
+              {isExtracting && (
+                <p style={{ color: 'var(--primary)', fontSize: '14px', marginTop: '12px', display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600 }}>
+                  <span className="animate-spin">⌛</span> Extracting text from your resume...
+                </p>
+              )}
+              {extractError && (
+                <p style={{ color: 'var(--warning)', fontSize: '14px', marginTop: '12px', fontWeight: 500 }}>⚠️ {extractError}</p>
+              )}
             </div>
 
-            <div className="form-group full-width" style={{ marginTop: '1rem' }}>
-              <label>Resume Text (Extracted automatically or paste manually)</label>
-              <textarea 
-                value={resumeText} 
-                onChange={(e) => setResumeText(e.target.value)} 
-                rows={5} 
-                style={{ width: '100%', padding: '1rem', background: 'var(--bg-primary)', color: 'var(--text-primary)', border: '1px solid var(--border)', borderRadius: '8px' }}
-                placeholder="Paste your resume content here if upload fails..."
+            <div style={{ marginBottom: '24px' }}>
+              <label style={{ fontSize: '13px', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: '12px' }}>
+                Resume Text {resumeText && <span style={{ color: 'var(--success)', fontWeight: 600, textTransform: 'none' }}>✓ {resumeText.length.toLocaleString()} characters extracted</span>}
+              </label>
+              <textarea
+                value={resumeText}
+                onChange={e => setResumeText(e.target.value)}
+                rows={5}
+                placeholder="Resume text appears here after upload, or paste it manually..."
+                style={{ width: '100%', padding: '16px', background: '#f8fafc', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', fontSize: '14px', fontFamily: 'monospace', lineHeight: 1.5, resize: 'vertical' }}
               />
             </div>
 
             {mode === 'tailored' && (
-              <div className="form-group full-width" style={{ marginTop: '1rem' }}>
-                <label>Job Description</label>
-                <textarea 
-                  value={jobDescription} 
-                  onChange={(e) => setJobDescription(e.target.value)} 
-                  rows={5} 
-                  style={{ width: '100%', padding: '1rem', background: 'var(--bg-primary)', color: 'var(--text-primary)', border: '1px solid var(--border)', borderRadius: '8px' }}
-                  placeholder="Paste the target job description here..."
+              <div style={{ marginBottom: '32px' }}>
+                <label style={{ fontSize: '13px', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: '12px' }}>
+                  Job Description
+                </label>
+                <textarea
+                  value={jobDescription}
+                  onChange={e => setJobDescription(e.target.value)}
+                  rows={6}
+                  placeholder="Paste the target job description here to get a tailored match score..."
+                  style={{ width: '100%', padding: '16px', background: '#f8fafc', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', fontSize: '14px', lineHeight: 1.5, resize: 'vertical' }}
                 />
               </div>
             )}
 
-            <button 
-              className="btn btn-primary btn-large" 
-              style={{ width: '100%', marginTop: '2rem', justifyContent: 'center' }} 
-              onClick={handleAnalyze} 
-              disabled={isAnalyzing}
+            <button
+              onClick={handleAnalyze}
+              disabled={isAnalyzing || isExtracting || !resumeText}
+              className="btn btn-primary btn-large"
+              style={{ width: '100%', justifyContent: 'center' }}
             >
-              <i className={isAnalyzing ? "fas fa-spinner fa-spin" : "fas fa-magic"}></i>
-              {isAnalyzing ? " Analyzing..." : " Analyze Resume"}
+              {isAnalyzing ? <><span className="animate-spin">⚙️</span> Analyzing with AI...</> : <>✨ Analyze Resume</>}
             </button>
+
+            {!user && (
+              <p style={{ textAlign: 'center', fontSize: '13px', color: 'var(--text-muted)', marginTop: '16px' }}>
+                <Link href="/candidate" style={{ color: 'var(--primary)', fontWeight: 700 }}>Sign in</Link> to save your analysis history
+              </p>
+            )}
           </div>
         )}
 
+        {/* Results */}
         {result && (
-          <div className="dashboard-container" style={{ margin: '0', padding: '0', background: 'transparent', boxShadow: 'none' }}>
-            <div className="dashboard-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div>
-                <h2>Your Profile Analysis</h2>
-                <p>AI-generated compatibility report</p>
+          <div>
+            {/* Candidate Banner */}
+            {result.candidate?.name && (
+              <div className="card" style={{ background: 'linear-gradient(135deg, #f0f9ff, #eff6ff)', border: 'none', display: 'flex', alignItems: 'center', gap: '20px', padding: '32px', marginBottom: '24px', flexWrap: 'wrap' }}>
+                <div style={{ width: '64px', height: '64px', borderRadius: '50%', background: 'var(--primary)', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '28px', fontWeight: 800, flexShrink: 0 }}>
+                  {result.candidate.name.charAt(0).toUpperCase()}
+                </div>
+                <div style={{ flex: 1 }}>
+                  <h3 style={{ fontSize: '24px', fontWeight: 900, marginBottom: '8px' }}>{result.candidate.name}</h3>
+                  <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', color: 'var(--text-secondary)', fontSize: '14px' }}>
+                    {result.candidate.email && <span>📧 {result.candidate.email}</span>}
+                    {result.candidate.phone && <span>📱 {result.candidate.phone}</span>}
+                    {result.candidate.location && <span>📍 {result.candidate.location}</span>}
+                  </div>
+                </div>
+                {analysis.overallScore > 0 && (
+                  <div style={{ textAlign: 'center', background: 'white', padding: '12px 20px', borderRadius: 'var(--radius-md)', boxShadow: 'var(--shadow-sm)' }}>
+                    <div style={{ fontSize: '32px', fontWeight: 900, color: analysis.overallScore >= 80 ? 'var(--success)' : analysis.overallScore >= 60 ? 'var(--warning)' : 'var(--danger)', lineHeight: 1 }}>
+                      {analysis.overallScore}
+                    </div>
+                    <div style={{ fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)', marginTop: '4px' }}>Overall Score</div>
+                  </div>
+                )}
               </div>
-              <button className="btn btn-secondary" onClick={() => setResult(null)}>
-                <i className="fas fa-redo"></i> Analyze Another
-              </button>
+            )}
+
+            {/* Tabs */}
+            <div style={{ display: 'flex', gap: '4px', marginBottom: '24px', background: 'var(--bg-primary)', padding: '6px', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)', overflowX: 'auto' }}>
+              {TABS.map(tab => (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id)}
+                  style={{
+                    padding: '10px 16px', borderRadius: 'var(--radius-md)', border: 'none', whiteSpace: 'nowrap',
+                    background: activeTab === tab.id ? 'var(--primary)' : 'transparent',
+                    color: activeTab === tab.id ? 'white' : 'var(--text-muted)',
+                    cursor: 'pointer', fontWeight: 700, fontSize: '14px', transition: 'all 0.2s',
+                    boxShadow: activeTab === tab.id ? 'var(--shadow-sm)' : 'none'
+                  }}
+                >
+                  {tab.label}
+                </button>
+              ))}
             </div>
 
-            <div className="score-grid">
-              <div className="score-card">
-                <div className="score-icon"><i className="fas fa-bullseye"></i></div>
-                <h3>Overall Score</h3>
-                <div className="circular-progress" style={{background: `conic-gradient(var(--primary) ${result.overall_score}%, var(--bg-card) 0)`}}>
-                  <div className="score-text" style={{background: 'var(--bg-secondary)', borderRadius: '50%', width: '100px', height: '100px', display: 'flex', alignItems: 'center', justifyContent: 'center'}}>{result.overall_score}%</div>
-                </div>
-              </div>
-
-              <div className="score-card">
-                <div className="score-icon"><i className="fas fa-chart-line"></i></div>
-                <h3>ATS Score</h3>
-                <div className="circular-progress" style={{background: `conic-gradient(var(--success) ${result.ats_score}%, var(--bg-card) 0)`}}>
-                  <div className="score-text" style={{background: 'var(--bg-secondary)', borderRadius: '50%', width: '100px', height: '100px', display: 'flex', alignItems: 'center', justifyContent: 'center'}}>{result.ats_score}%</div>
-                </div>
-              </div>
-
-              {result.jd_match_score && (
-                <div className="score-card">
-                  <div className="score-icon"><i className="fas fa-briefcase"></i></div>
-                  <h3>JD Match</h3>
-                  <div className="circular-progress" style={{background: `conic-gradient(var(--accent) ${result.jd_match_score}%, var(--bg-card) 0)`}}>
-                    <div className="score-text" style={{background: 'var(--bg-secondary)', borderRadius: '50%', width: '100px', height: '100px', display: 'flex', alignItems: 'center', justifyContent: 'center'}}>{result.jd_match_score}%</div>
+            {/* Tab Content */}
+            <div className="card" style={{ padding: '40px' }}>
+              
+              {activeTab === 'scores' && (
+                <div>
+                  <div style={{ display: 'flex', gap: '32px', justifyContent: 'center', flexWrap: 'wrap', marginBottom: '48px' }}>
+                    <ScoreCircle score={analysis.overallScore} label="Overall Score" color="auto" size={140} />
+                    <ScoreCircle score={analysis.atsScore} label="ATS Match" color="var(--primary)" size={140} />
+                    <ScoreCircle score={analysis.keywordScore} label="Keywords" color="var(--secondary)" size={140} />
+                    <ScoreCircle score={analysis.contentScore} label="Content" color="var(--warning)" size={140} />
+                    {analysis.jdMatchScore != null && (
+                      <ScoreCircle score={analysis.jdMatchScore} label="JD Match" color="var(--success)" size={140} />
+                    )}
+                  </div>
+                  
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '16px' }}>
+                    {[
+                      { label: 'Format Score', value: analysis.formatScore, color: 'var(--primary)' },
+                      { label: 'Content Quality', value: analysis.contentScore, color: 'var(--secondary)' },
+                      { label: 'Keyword Density', value: analysis.keywordScore, color: 'var(--warning)' },
+                      { label: 'ATS Parsability', value: analysis.atsScore, color: 'var(--success)' },
+                    ].map(item => (
+                      <div key={item.label} style={{ background: '#f8fafc', padding: '20px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px' }}>
+                          <span style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-secondary)' }}>{item.label}</span>
+                          <span style={{ fontSize: '16px', fontWeight: 800, color: item.color }}>{item.value || 0}%</span>
+                        </div>
+                        <div style={{ height: '8px', background: '#e2e8f0', borderRadius: '4px', overflow: 'hidden' }}>
+                          <div style={{ height: '100%', width: `${item.value || 0}%`, background: item.color, transition: 'width 1s ease' }} />
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 </div>
               )}
-            </div>
 
-            <div className="detailed-analysis">
-              <div className="analysis-section">
-                <h3><i className="fas fa-star" style={{ color: 'var(--warning)' }}></i> Strengths</h3>
-                <div className="analysis-list">
-                  {result.strengths?.map((s, i) => (
-                    <div key={i} className="analysis-item">
-                      <i className="fas fa-check" style={{ color: 'var(--success)' }}></i>
-                      <span>{s}</span>
+              {activeTab === 'profile' && (
+                <div style={{ display: 'grid', gap: '32px' }}>
+                  {result.summary && (
+                    <div>
+                      <h4 style={{ fontSize: '18px', fontWeight: 800, marginBottom: '12px' }}>Professional Summary</h4>
+                      <p style={{ color: 'var(--text-secondary)', lineHeight: 1.7, fontSize: '16px' }}>{result.summary}</p>
                     </div>
-                  ))}
+                  )}
+                  {result.education?.length > 0 && (
+                    <div>
+                      <h4 style={{ fontSize: '18px', fontWeight: 800, marginBottom: '16px' }}>🎓 Education</h4>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                        {result.education.map((edu, i) => (
+                          <div key={i} style={{ background: '#f8fafc', padding: '20px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)' }}>
+                            <div style={{ fontWeight: 800, fontSize: '16px', marginBottom: '4px' }}>{edu.degree} in {edu.field}</div>
+                            <div style={{ color: 'var(--primary)', fontWeight: 600, fontSize: '15px', marginBottom: '4px' }}>{edu.institution}</div>
+                            <div style={{ color: 'var(--text-muted)', fontSize: '13px', fontWeight: 500 }}>{edu.year} {edu.gpa && `· GPA: ${edu.gpa}`}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {result.certifications?.length > 0 && (
+                    <div>
+                      <h4 style={{ fontSize: '18px', fontWeight: 800, marginBottom: '16px' }}>🏆 Certifications</h4>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px' }}>
+                        {result.certifications.map((cert, i) => (
+                          <div key={i} style={{ background: '#fffbeb', border: '1px solid #fde68a', padding: '16px', borderRadius: 'var(--radius-md)' }}>
+                            <div style={{ fontWeight: 800, color: 'var(--warning)', fontSize: '15px', marginBottom: '4px' }}>{cert.name}</div>
+                            <div style={{ color: 'var(--text-muted)', fontSize: '13px', fontWeight: 500 }}>{cert.issuer} {cert.date && `· ${cert.date}`}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {result.projects?.length > 0 && (
+                    <div>
+                      <h4 style={{ fontSize: '18px', fontWeight: 800, marginBottom: '16px' }}>🚀 Projects</h4>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                        {result.projects.map((proj, i) => (
+                          <div key={i} style={{ background: '#f8fafc', padding: '24px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
+                              <div style={{ fontWeight: 800, fontSize: '16px' }}>{proj.name}</div>
+                              {proj.url && <a href={proj.url} target="_blank" rel="noopener noreferrer" style={{ fontSize: '13px', color: 'var(--primary)', fontWeight: 700 }}>🔗 View Project</a>}
+                            </div>
+                            <p style={{ color: 'var(--text-secondary)', fontSize: '15px', lineHeight: 1.6, marginBottom: '16px' }}>{proj.description}</p>
+                            {proj.technologies?.length > 0 && (
+                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                                {proj.technologies.map((t, j) => (
+                                  <span key={j} style={{ fontSize: '12px', padding: '4px 10px', background: '#eff6ff', color: 'var(--primary)', borderRadius: '100px', fontWeight: 600 }}>{t}</span>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
-              </div>
+              )}
 
-              <div className="analysis-section">
-                <h3><i className="fas fa-exclamation-triangle" style={{ color: 'var(--danger)' }}></i> Areas for Improvement</h3>
-                <div className="analysis-list">
-                  {result.areas_for_improvement?.map((a, i) => (
-                    <div key={i} className="analysis-item">
-                      <i className="fas fa-times" style={{ color: 'var(--danger)' }}></i>
-                      <span>{a}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
+              {activeTab === 'experience' && <ExperienceTimeline experience={result.experience} />}
+              
+              {activeTab === 'skills' && <SkillGapAnalyzer skills={result.skills} missingKeywords={analysis.missingKeywords} jobMatching={analysis.jobMatching} />}
+              
+              {activeTab === 'heatmap' && <ResumeHeatmap heatmapData={analysis.heatmapData} />}
+              
+              {activeTab === 'radar' && <JobRadar jobMatching={analysis.jobMatching} />}
 
-              <div className="analysis-section">
-                <h3><i className="fas fa-lightbulb" style={{ color: 'var(--primary)' }}></i> AI Recommendations</h3>
-                <div className="analysis-list">
-                  {result.recommendations?.map((r, i) => (
-                    <div key={i} className="analysis-item">
-                      <i className="fas fa-arrow-right" style={{ color: 'var(--primary)' }}></i>
-                      <span>{r}</span>
+              {activeTab === 'insights' && (
+                <div style={{ display: 'grid', gap: '32px' }}>
+                  {analysis.strengths?.length > 0 && (
+                    <div>
+                      <h4 style={{ fontSize: '18px', fontWeight: 800, color: 'var(--success)', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>⭐ Key Strengths</h4>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                        {analysis.strengths.map((s, i) => (
+                          <div key={i} style={{ padding: '16px', background: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: 'var(--radius-md)', display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
+                            <span style={{ color: 'var(--success)', fontWeight: 800 }}>✓</span>
+                            <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{s}</span>
+                          </div>
+                        ))}
+                      </div>
                     </div>
-                  ))}
+                  )}
+                  {analysis.areasForImprovement?.length > 0 && (
+                    <div>
+                      <h4 style={{ fontSize: '18px', fontWeight: 800, color: 'var(--danger)', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>⚠️ Areas for Improvement</h4>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                        {analysis.areasForImprovement.map((a, i) => (
+                          <div key={i} style={{ padding: '16px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 'var(--radius-md)', display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
+                            <span style={{ color: 'var(--danger)', fontWeight: 800 }}>!</span>
+                            <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{a}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {analysis.recommendations?.length > 0 && (
+                    <div>
+                      <h4 style={{ fontSize: '18px', fontWeight: 800, color: 'var(--primary)', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>💡 AI Recommendations</h4>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                        {analysis.recommendations.map((r, i) => (
+                          <div key={i} style={{ padding: '16px', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 'var(--radius-md)', display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
+                            <span style={{ color: 'var(--primary)', fontWeight: 800 }}>→</span>
+                            <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{r}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
-              </div>
+              )}
+
             </div>
           </div>
         )}

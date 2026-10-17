@@ -1,50 +1,56 @@
-import { NextResponse } from 'next/server';
 import { GoogleGenAI } from '@google/genai';
+import { buildResumeAnalysisPrompt } from '@/lib/nlpPrompt';
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+const genAI = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 export async function POST(req) {
   try {
-    const body = await req.json();
-    const { resumeText, jobDescription, mode } = body;
+    const { resumeText, jobDescription, mode } = await req.json();
 
-    if (!resumeText) {
-      return NextResponse.json({ error: 'Resume text is required' }, { status: 400 });
+    if (!resumeText || resumeText.trim().length < 50) {
+      return Response.json(
+        { error: 'Resume text is too short or empty. Please provide a valid resume.' },
+        { status: 400 }
+      );
     }
 
-    let prompt = `Analyze this resume as an expert technical recruiter.\n\nResume:\n${resumeText}\n`;
-    
-    if (mode === 'tailored' && jobDescription) {
-      prompt += `\nTarget Job Description:\n${jobDescription}\n\nPlease provide a highly detailed, constructive evaluation tailored to this specific job description.`;
-    } else {
-      prompt += `\nPlease provide a comprehensive, general evaluation of strengths, areas for improvement, and an overall ATS score.`;
-    }
+    const prompt = buildResumeAnalysisPrompt(resumeText, jobDescription, mode || 'general');
 
-    prompt += `\n\nReturn the response strictly as a JSON object with the following structure:
-{
-  "overall_score": 85,
-  "ats_score": 80,
-  "jd_match_score": 90, // only if tailored mode
-  "skills_identified": ["React", "Node.js"],
-  "strengths": ["Strong frontend experience", "Good education"],
-  "areas_for_improvement": ["Lack of cloud experience"],
-  "recommendations": ["Add AWS certification"]
-}`;
-
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.6-flash',
+    const result = await genAI.models.generateContent({
+      model: 'gemini-2.0-flash',
       contents: prompt,
       config: {
-        responseMimeType: 'application/json',
-      }
+        temperature: 0.2,
+        maxOutputTokens: 8192,
+      },
     });
 
-    const resultText = response.text;
-    const jsonResult = JSON.parse(resultText);
+    const rawText = result.text?.trim() || '';
 
-    return NextResponse.json(jsonResult);
-  } catch (error) {
-    console.error('Gemini API Error:', error);
-    return NextResponse.json({ error: 'Failed to analyze resume' }, { status: 500 });
+    // Strip any markdown code fences if model adds them
+    const jsonText = rawText
+      .replace(/^```json\s*/i, '')
+      .replace(/^```\s*/i, '')
+      .replace(/\s*```$/i, '')
+      .trim();
+
+    let parsed;
+    try {
+      parsed = JSON.parse(jsonText);
+    } catch (parseError) {
+      console.error('JSON parse error. Raw output:', rawText.substring(0, 500));
+      return Response.json(
+        { error: 'AI response could not be parsed. Please try again.' },
+        { status: 500 }
+      );
+    }
+
+    return Response.json({ success: true, data: parsed });
+  } catch (err) {
+    console.error('/api/analyze error:', err);
+    return Response.json(
+      { error: err.message || 'Analysis failed. Please try again.' },
+      { status: 500 }
+    );
   }
 }
